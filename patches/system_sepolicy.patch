@@ -1,0 +1,37 @@
+From 04906201c8d7f01aa24fb26890b5166a90932352 Mon Sep 17 00:00:00 2001
+From: Ruslan Yanchyshyn <ruslan.yanchyshyn@lemberg.co.uk>
+Date: Thu, 1 Jun 2017 20:06:40 +0300
+Subject: [PATCH] NavBarEx service added.
+
+---
+ service.te       | 1 +
+ service_contexts | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/service.te b/service.te
+index e7a30f9..d9ffb66 100644
+--- a/service.te
++++ b/service.te
+@@ -74,6 +74,7 @@ type media_session_service, app_api_service, system_server_service, service_mana
+ type meminfo_service, system_api_service, system_server_service, service_manager_type;
+ type midi_service, app_api_service, system_server_service, service_manager_type;
+ type mount_service, app_api_service, system_server_service, service_manager_type;
++type navbarex_service, app_api_service, system_server_service, service_manager_type;
+ type netpolicy_service, app_api_service, system_server_service, service_manager_type;
+ type netstats_service, app_api_service, system_server_service, service_manager_type;
+ type network_management_service, app_api_service, system_server_service, service_manager_type;
+diff --git a/service_contexts b/service_contexts
+index dd7e49f..ac52a36 100644
+--- a/service_contexts
++++ b/service_contexts
+@@ -84,6 +84,7 @@ media_session                             u:object_r:media_session_service:s0
+ meminfo                                   u:object_r:meminfo_service:s0
+ midi                                      u:object_r:midi_service:s0
+ mount                                     u:object_r:mount_service:s0
++navbarex                                  u:object_r:navbarex_service:s0
+ netd                                      u:object_r:netd_service:s0
+ netpolicy                                 u:object_r:netpolicy_service:s0
+ netstats                                  u:object_r:netstats_service:s0
+-- 
+2.7.4
+

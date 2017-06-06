@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">NavBarExDemo</string>
+    <string name="priority">Priority</string>
+    <string name="text">Text</string>
+    <string name="color">Color</string>
+    <string name="add">Add</string>
+    <string name="del">Del</string>
+    <string name="replace">Replace</string>
+    <string name="button">Button</string>
+    <string name="image">Image</string>
+</resources>

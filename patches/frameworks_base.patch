@@ -1,0 +1,937 @@
+From 93c98e35a8390e99110a08569ebc5392b0bad5be Mon Sep 17 00:00:00 2001
+From: Ruslan Yanchyshyn <ruslan.yanchyshyn@lemberg.co.uk>
+Date: Tue, 6 Jun 2017 19:48:55 +0300
+Subject: [PATCH] Added 'NavBarExService' service.
+
+---
+ Android.mk                                         |   3 +
+ core/java/android/app/SystemServiceRegistry.java   |  16 ++
+ core/java/android/content/Context.java             |   8 +
+ core/java/android/os/INavBarExService.aidl         |  25 +++
+ core/java/android/os/INavBarExServiceUI.aidl       |  20 ++
+ core/java/android/os/NavBarExServiceMgr.java       |  76 +++++++
+ .../src/com/android/systemui/VendorServices.java   | 179 ++++++++++++++-
+ .../statusbar/phone/NavigationBarInflaterView.java | 106 +++++++++
+ .../statusbar/phone/NavigationBarView.java         |  32 +++
+ .../systemui/statusbar/phone/PhoneStatusBar.java   |  31 +++
+ .../java/com/android/server/NavBarExService.java   | 247 +++++++++++++++++++++
+ services/java/com/android/server/SystemServer.java |   9 +
+ 12 files changed, 747 insertions(+), 5 deletions(-)
+ create mode 100644 core/java/android/os/INavBarExService.aidl
+ create mode 100644 core/java/android/os/INavBarExServiceUI.aidl
+ create mode 100644 core/java/android/os/NavBarExServiceMgr.java
+ create mode 100644 services/java/com/android/server/NavBarExService.java
+
+diff --git a/Android.mk b/Android.mk
+index d813c91..c71aab5 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -225,6 +225,8 @@ LOCAL_SRC_FILES += \
+ 	core/java/android/os/IHardwarePropertiesManager.aidl \
+ 	core/java/android/os/IMaintenanceActivityListener.aidl \
+ 	core/java/android/os/IMessenger.aidl \
++	core/java/android/os/INavBarExService.aidl \
++	core/java/android/os/INavBarExServiceUI.aidl \
+ 	core/java/android/os/INetworkActivityListener.aidl \
+ 	core/java/android/os/INetworkManagementService.aidl \
+ 	core/java/android/os/IPermissionController.aidl \
+@@ -588,6 +590,7 @@ aidl_files := \
+ 	frameworks/base/core/java/android/hardware/usb/UsbInterface.aidl \
+ 	frameworks/base/core/java/android/hardware/usb/UsbEndpoint.aidl \
+ 	frameworks/base/core/java/android/hardware/usb/UsbAccessory.aidl \
++	frameworks/base/core/java/android/os/INavBarExService.aidl \
+ 	frameworks/base/core/java/android/os/Messenger.aidl \
+ 	frameworks/base/core/java/android/os/PatternMatcher.aidl \
+ 	frameworks/base/core/java/android/os/Message.aidl \
+diff --git a/core/java/android/app/SystemServiceRegistry.java b/core/java/android/app/SystemServiceRegistry.java
+index 55744b9..5ebe9de 100644
+--- a/core/java/android/app/SystemServiceRegistry.java
++++ b/core/java/android/app/SystemServiceRegistry.java
+@@ -16,6 +16,9 @@
+ 
+ package android.app;
+ 
++import android.os.INavBarExService;
++import android.os.NavBarExServiceMgr;
++
+ import com.android.internal.app.IAppOpsService;
+ import com.android.internal.app.ISoundTriggerService;
+ import com.android.internal.appwidget.IAppWidgetService;
+@@ -775,6 +778,19 @@ final class SystemServiceRegistry {
+                 return new ContextHubManager(ctx.getOuterContext(),
+                   ctx.mMainThread.getHandler().getLooper());
+             }});
++
++        registerService(Context.NAVBAREX_SERVICE, NavBarExServiceMgr.class,
++            new CachedServiceFetcher<NavBarExServiceMgr>() {
++                @Override
++                public NavBarExServiceMgr createService(ContextImpl ctx) {
++                    IBinder b = ServiceManager.getService(Context.NAVBAREX_SERVICE);
++                    INavBarExService service = INavBarExService.Stub.asInterface(b);
++                    if (service == null) {
++                        Log.wtf(TAG, "Failed to get INavBarExService service.");
++                        return null;
++                    }
++                    return new NavBarExServiceMgr(ctx, service);
++                }});
+     }
+ 
+     /**
+diff --git a/core/java/android/content/Context.java b/core/java/android/content/Context.java
+index 3a2f471..3d6815b 100644
+--- a/core/java/android/content/Context.java
++++ b/core/java/android/content/Context.java
+@@ -2907,6 +2907,14 @@ public abstract class Context {
+ 
+     /**
+      * Use with {@link #getSystemService} to retrieve a
++     * {@link android.os.NavBarExServiceMgr} for using NavBarExService
++     *
++     * @see #getSystemService
++     */
++    public static final String NAVBAREX_SERVICE = "navbarex";
++
++    /**
++     * Use with {@link #getSystemService} to retrieve a
+      * {@link android.os.RecoverySystem} for accessing the recovery system
+      * service.
+      *
+diff --git a/core/java/android/os/INavBarExService.aidl b/core/java/android/os/INavBarExService.aidl
+new file mode 100644
+index 0000000..0d3685a
+--- /dev/null
++++ b/core/java/android/os/INavBarExService.aidl
+@@ -0,0 +1,25 @@
++/*
++ * aidl file :
++ * frameworks/base/core/java/android/os/INavBarExService.aidl
++ * This file contains definitions of functions which are
++ * exposed by service.
++ */
++
++package android.os;
++
++import android.os.INavBarExServiceUI;
++import android.widget.RemoteViews;
++
++/**  */
++interface INavBarExService
++{
++	/**
++	* @hide
++	*/
++    void setUI(INavBarExServiceUI ui);
++
++    String addView(in int priority, in RemoteViews remoteViews);
++    boolean removeView(in String id);
++    boolean replaceView(in String id, in RemoteViews remoteViews);
++    boolean viewExist(in String id);
++}
+\ No newline at end of file
+diff --git a/core/java/android/os/INavBarExServiceUI.aidl b/core/java/android/os/INavBarExServiceUI.aidl
+new file mode 100644
+index 0000000..7fda0f6
+--- /dev/null
++++ b/core/java/android/os/INavBarExServiceUI.aidl
+@@ -0,0 +1,20 @@
++/*
++ * aidl file :
++ * frameworks/base/core/java/android/os/INavBarExServiceUI.aidl
++ * This file contains definitions of functions which are provided by UI.
++ */
++
++package android.os;
++
++import android.widget.RemoteViews;
++
++/** @hide */
++oneway interface INavBarExServiceUI
++{
++	void navBarExAddViewAtStart(in String id, in RemoteViews remoteViews);
++	void navBarExAddViewAtEnd(in String id, in RemoteViews remoteViews);
++	void navBarExAddViewBefore(in String targetId, in String id, in RemoteViews remoteViews);
++	void navBarExAddViewAfter(in String targetId, in String id, in RemoteViews remoteViews);
++	void navBarExRemoveView(in String id);
++	void navBarExReplaceView(in String id, in RemoteViews remoteViews);
++}
+diff --git a/core/java/android/os/NavBarExServiceMgr.java b/core/java/android/os/NavBarExServiceMgr.java
+new file mode 100644
+index 0000000..6c16c07
+--- /dev/null
++++ b/core/java/android/os/NavBarExServiceMgr.java
+@@ -0,0 +1,76 @@
++package android.os;
++
++/**
++ * /framework/base/core/java/android/os/NavBarExServiceMgr.java
++ * It will be available in framework through import android.os.NavBarExServiceMgr;
++ */
++
++import android.content.Context;
++import android.widget.RemoteViews;
++
++public class NavBarExServiceMgr
++{
++	private static final String TAG = "NavBarExServiceMgr";
++
++	private final Context context;
++	private final INavBarExService navBarExService;
++
++	public static NavBarExServiceMgr getInstance(Context context)
++	{
++		return (NavBarExServiceMgr) context.getSystemService(Context.NAVBAREX_SERVICE);
++	}
++
++	/**
++	 * Creates a new instance.
++	 *
++	 * @param context The current context in which to operate.
++	 * @param service The backing system service.
++	 * @hide
++	 */
++	public NavBarExServiceMgr(Context context, INavBarExService service)
++	{
++		this.context = context;
++		if (service == null) throw new IllegalArgumentException("service is null");
++		this.navBarExService = service;
++	}
++
++	/**
++	 * Sets the UI component
++	 *
++	 * @param ui - ui component
++	 * @throws RemoteException
++	 * @hide
++	 */
++	public void setUI(INavBarExServiceUI ui) throws RemoteException
++	{
++		navBarExService.setUI(ui);
++	}
++
++	public String addView(int priority, RemoteViews remoteViews)
++	{
++		try { return navBarExService.addView(priority, remoteViews); }
++		catch (RemoteException ignored) {}
++		return null;
++	}
++
++	public boolean removeView(String id)
++	{
++		try { return navBarExService.removeView(id); }
++		catch (RemoteException ignored) {}
++		return false;
++	}
++
++	public boolean replaceView(String id, RemoteViews remoteViews)
++	{
++		try { return navBarExService.replaceView(id, remoteViews); }
++		catch (RemoteException e) {}
++		return false;
++	}
++
++	public boolean viewExist(String id)
++	{
++		try { return navBarExService.viewExist(id); }
++		catch (RemoteException e) {}
++		return false;
++	}
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/VendorServices.java b/packages/SystemUI/src/com/android/systemui/VendorServices.java
+index 0be6b12..d11559a 100644
+--- a/packages/SystemUI/src/com/android/systemui/VendorServices.java
++++ b/packages/SystemUI/src/com/android/systemui/VendorServices.java
+@@ -16,14 +16,183 @@
+ 
+ package com.android.systemui;
+ 
++
++import android.content.Context;
++import android.os.Handler;
++import android.os.INavBarExServiceUI;
++import android.os.NavBarExServiceMgr;
++import android.util.Log;
++import android.widget.RemoteViews;
++
++import java.lang.Exception;
++import java.lang.Override;
++import java.lang.Runnable;
++
++import com.android.systemui.statusbar.phone.PhoneStatusBar;
++
+ /**
+  * Placeholder for any vendor-specific services.
+  */
+-public class VendorServices extends SystemUI {
++public class VendorServices extends SystemUI
++{
++
++	private static final String TAG = "NavBarEx VendorServices";
++	private static final boolean DEBUG = false;
++
++	private final Handler handler = new Handler();
++
++	private NavBarExServiceMgr navBarExServiceMgr;
++	private volatile PhoneStatusBar statusBar;
++
++	private INavBarExServiceUI.Stub navBarExServiceUI = new INavBarExServiceUI.Stub()
++	{
++		@Override
++		public void navBarExAddViewAtStart(final String id, final RemoteViews remoteViews)
++		{
++			if (!initStatusBar()) return;
++
++			handler.post(new Runnable()
++			{
++				@Override
++				public void run()
++				{
++					statusBar.navBarExAddViewAtStart(id, remoteViews);
++				}
++			});
++		}
++
++		@Override
++		public void navBarExAddViewAtEnd(final String id, final RemoteViews remoteViews)
++		{
++			if (!initStatusBar()) return;
++
++			handler.post(new Runnable()
++			{
++				@Override
++				public void run()
++				{
++					statusBar.navBarExAddViewAtEnd(id, remoteViews);
++				}
++			});
++		}
++
++		@Override
++		public void navBarExAddViewBefore(final String targetId, final String id, final RemoteViews remoteViews)
++		{
++			if (!initStatusBar()) return;
++
++			handler.post(new Runnable()
++			{
++				@Override
++				public void run()
++				{
++					statusBar.navBarExAddViewBefore(targetId, id, remoteViews);
++				}
++			});
++		}
++
++		@Override
++		public void navBarExAddViewAfter(final String targetId, final String id, final RemoteViews remoteViews)
++		{
++			if (!initStatusBar()) return;
++
++			handler.post(new Runnable()
++			{
++				@Override
++				public void run()
++				{
++					statusBar.navBarExAddViewAfter(targetId, id, remoteViews);
++				}
++			});
++		}
++
++		@Override
++		public void navBarExRemoveView(final String id)
++		{
++			if (!initStatusBar()) return;
++
++			handler.post(new Runnable()
++			{
++				@Override
++				public void run()
++				{
++					statusBar.navBarExRemoveView(id);
++				}
++			});
++		}
++
++		@Override
++		public void navBarExReplaceView(final String id, final RemoteViews remoteViews)
++		{
++			if (!initStatusBar()) return;
++
++			handler.post(new Runnable()
++			{
++				@Override
++				public void run()
++				{
++					statusBar.navBarExReplaceView(id, remoteViews);
++				}
++			});
++		}
++	};
++
++	public VendorServices()
++	{
++		Log.d(TAG, "VendorServices()");
++	}
++
++	@Override
++	public void start()
++	{
++		Log.d(TAG, "start()");
++	}
++
++	@Override
++	protected void onBootCompleted()
++	{
++		super.onBootCompleted();
++
++		Log.d(TAG, "onBootCompleted()");
++
++		navBarExServiceMgr = (NavBarExServiceMgr) mContext.getSystemService(Context.NAVBAREX_SERVICE);
++		if (navBarExServiceMgr == null)
++		{
++			Log.e(TAG, "navBarExServiceMgr=null");
++			return;
++		}
++
++		try
++		{
++			navBarExServiceMgr.setUI(navBarExServiceUI);
++		}
++		catch (Exception e)
++		{
++			Log.e(TAG, "setUI exception: " + e);
++		}
++	}
++
++	private final Object initLock = new Object();
+ 
+-    @Override
+-    public void start() {
+-        // no-op
+-    }
++	private boolean initStatusBar()
++	{
++		if (statusBar == null)
++		{
++			synchronized (initLock)
++			{
++				if (statusBar == null)
++				{
++					statusBar = getComponent(PhoneStatusBar.class);
++					if (statusBar == null)
++					{
++						Log.e(TAG, "statusBar = null");
++						return false;
++					}
+ 
++					Log.d(TAG, "statusBar initialized");
++				}
++			}
++		}
++		return true;
++	}
+ }
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/NavigationBarInflaterView.java b/packages/SystemUI/src/com/android/systemui/statusbar/phone/NavigationBarInflaterView.java
+index 06c8b68..cffc710 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/NavigationBarInflaterView.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/NavigationBarInflaterView.java
+@@ -18,13 +18,16 @@ import android.annotation.Nullable;
+ import android.content.Context;
+ import android.content.res.Configuration;
+ import android.content.res.Resources;
++import android.transition.TransitionManager;
+ import android.util.AttributeSet;
+ import android.util.SparseArray;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.widget.Button;
+ import android.widget.FrameLayout;
+ import android.widget.LinearLayout;
++import android.widget.RemoteViews;
+ import android.widget.Space;
+ 
+ import com.android.systemui.R;
+@@ -161,6 +164,109 @@ public class NavigationBarInflaterView extends FrameLayout implements TunerServi
+         }
+     }
+ 
++    public void navBarExAddViewAtStart(String id, RemoteViews remoteViews) {
++        if ((mRot0 == null) || (mRot90 == null)) return;
++        ViewGroup ends0 = (ViewGroup) mRot0.findViewById(R.id.ends_group);
++        ViewGroup ends90 = (ViewGroup) mRot90.findViewById(R.id.ends_group);
++        if ((ends0 == null) || (ends90 == null)) return;
++
++        navBarExAddView(0, id, remoteViews, ends0);
++        navBarExAddView(0, id, remoteViews, ends90);
++    }
++
++    public void navBarExAddViewAtEnd(String id, RemoteViews remoteViews) {
++        if ((mRot0 == null) || (mRot90 == null)) return;
++        ViewGroup ends0 = (ViewGroup) mRot0.findViewById(R.id.ends_group);
++        ViewGroup ends90 = (ViewGroup) mRot90.findViewById(R.id.ends_group);
++        if ((ends0 == null) || (ends90 == null)) return;
++
++        navBarExAddView(-1, id, remoteViews, ends0);
++        navBarExAddView(-1, id, remoteViews, ends90);
++    }
++
++    public void navBarExAddViewBefore(String targetId, String id, RemoteViews remoteViews) {
++        if ((mRot0 == null) || (mRot90 == null)) return;
++        ViewGroup ends0 = (ViewGroup) mRot0.findViewById(R.id.ends_group);
++        ViewGroup ends90 = (ViewGroup) mRot90.findViewById(R.id.ends_group);
++        if ((ends0 == null) || (ends90 == null)) return;
++
++        View targetView = ends0.findViewWithTag(navBarExFormatTag(targetId));
++        if (targetView == null) return; // target view not found
++        int targetViewIndex = ends0.indexOfChild(targetView);
++        if (targetViewIndex == -1) return; // should not occurs
++
++        navBarExAddView(targetViewIndex, id, remoteViews, ends0);
++        navBarExAddView(targetViewIndex, id, remoteViews, ends90);
++    }
++
++    public void navBarExAddViewAfter(String targetId, String id, RemoteViews remoteViews) {
++        if ((mRot0 == null) || (mRot90 == null)) return;
++        ViewGroup ends0 = (ViewGroup) mRot0.findViewById(R.id.ends_group);
++        ViewGroup ends90 = (ViewGroup) mRot90.findViewById(R.id.ends_group);
++        if ((ends0 == null) || (ends90 == null)) return;
++
++        View targetView = ends0.findViewWithTag(navBarExFormatTag(targetId));
++        if (targetView == null) return; // target view not found
++        int targetViewIndex = ends0.indexOfChild(targetView);
++        if (targetViewIndex == -1) return; // should not occurs
++
++        navBarExAddView(targetViewIndex + 1, id, remoteViews, ends0);
++        navBarExAddView(targetViewIndex + 1, id, remoteViews, ends90);
++    }
++
++    public void navBarExRemoveView(String id) {
++        if ((mRot0 == null) || (mRot90 == null)) return;
++        ViewGroup ends0 = (ViewGroup) mRot0.findViewById(R.id.ends_group);
++        ViewGroup ends90 = (ViewGroup) mRot90.findViewById(R.id.ends_group);
++        if ((ends0 == null) || (ends90 == null)) return;
++
++        navBarExRemoveView(id, ends0);
++        navBarExRemoveView(id, ends90);
++    }
++
++    public void navBarExReplaceView(String id, RemoteViews remoteViews) {
++        if ((mRot0 == null) || (mRot90 == null)) return;
++        ViewGroup ends0 = (ViewGroup) mRot0.findViewById(R.id.ends_group);
++        ViewGroup ends90 = (ViewGroup) mRot90.findViewById(R.id.ends_group);
++        if ((ends0 == null) || (ends90 == null)) return;
++
++        navBarExReplaceView(id, remoteViews, ends0);
++        navBarExReplaceView(id, remoteViews, ends90);
++    }
++
++    private void navBarExAddView(int index, String id, RemoteViews remoteViews, ViewGroup parent) {
++        View view = remoteViews.apply(mContext, parent);
++        view.setTag(navBarExFormatTag(id));
++
++        TransitionManager.beginDelayedTransition(parent);
++        parent.addView(view, index);
++    }
++
++    private void navBarExRemoveView(String id, ViewGroup parent) {
++        View view = parent.findViewWithTag(navBarExFormatTag(id));
++        if (view != null) {
++            TransitionManager.beginDelayedTransition(parent);
++            parent.removeView(view);
++        }
++    }
++
++    private void navBarExReplaceView(String id, RemoteViews remoteViews, ViewGroup parent) {
++        View view = parent.findViewWithTag(navBarExFormatTag(id));
++        if (view != null) {
++            int index = parent.indexOfChild(view);
++
++            parent.removeViewAt(index);
++
++            view = remoteViews.apply(mContext, parent);
++            view.setTag(navBarExFormatTag(id));
++            parent.addView(view, index);
++        }
++    }
++
++    private static String navBarExFormatTag(String id) {
++        return String.format("statusbarex:%s", id);
++    }
++
+     private void updateAlternativeOrder() {
+         updateAlternativeOrder(mRot0.findViewById(R.id.ends_group));
+         updateAlternativeOrder(mRot0.findViewById(R.id.center_group));
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/NavigationBarView.java b/packages/SystemUI/src/com/android/systemui/statusbar/phone/NavigationBarView.java
+index 0bc70b5..ba3904f 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/NavigationBarView.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/NavigationBarView.java
+@@ -44,6 +44,8 @@ import android.view.WindowManager;
+ import android.view.WindowManagerGlobal;
+ import android.view.inputmethod.InputMethodManager;
+ import android.widget.LinearLayout;
++import android.widget.RemoteViews;
++
+ import com.android.systemui.R;
+ import com.android.systemui.RecentsComponent;
+ import com.android.systemui.stackdivider.Divider;
+@@ -427,6 +429,36 @@ public class NavigationBarView extends LinearLayout {
+         updateLayoutTransitionsEnabled();
+     }
+ 
++
++    public void navBarExAddViewAtStart(String id, RemoteViews remoteViews) {
++        mNavigationInflaterView.navBarExAddViewAtStart(id, remoteViews);
++    }
++
++    public void navBarExAddViewAtEnd(String id, RemoteViews remoteViews) {
++        mNavigationInflaterView.navBarExAddViewAtEnd(id, remoteViews);
++    }
++
++    public void navBarExAddViewBefore(String targetId, String id, RemoteViews remoteViews) {
++        mNavigationInflaterView.navBarExAddViewBefore(targetId, id, remoteViews);
++    }
++
++    public void navBarExAddViewAfter(String targetId, String id, RemoteViews remoteViews) {
++        mNavigationInflaterView.navBarExAddViewAfter(targetId, id, remoteViews);
++    }
++
++    public void navBarExRemoveView(String id) {
++        mNavigationInflaterView.navBarExRemoveView(id);
++    }
++
++    public void navBarExReplaceView(String id, RemoteViews remoteViews) {
++        mNavigationInflaterView.navBarExReplaceView(id, remoteViews);
++    }
++
++    private static String navBarExFormatTag(String id) {
++        return String.format("navbarex:%s", id);
++    }
++
++
+     private void updateLayoutTransitionsEnabled() {
+         boolean enabled = !mWakeAndUnlocking && mLayoutTransitionsEnabled;
+         ViewGroup navButtons = (ViewGroup) getCurrentView().findViewById(R.id.nav_buttons);
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBar.java b/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBar.java
+index 30613bc..a15ec68 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBar.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBar.java
+@@ -115,6 +115,7 @@ import android.view.WindowManagerGlobal;
+ import android.view.animation.AccelerateInterpolator;
+ import android.view.animation.Interpolator;
+ import android.widget.ImageView;
++import android.widget.RemoteViews;
+ import android.widget.TextView;
+ 
+ import com.android.internal.logging.MetricsLogger;
+@@ -1676,6 +1677,36 @@ public class PhoneStatusBar extends BaseStatusBar implements DemoMode,
+         setAreThereNotifications();
+     }
+ 
++    public void navBarExAddViewAtStart(String id, RemoteViews remoteViews) {
++        if (mNavigationBarView == null) return;
++        mNavigationBarView.navBarExAddViewAtStart(id, remoteViews);
++    }
++
++    public void navBarExAddViewAtEnd(String id, RemoteViews remoteViews) {
++        if (mNavigationBarView == null) return;
++        mNavigationBarView.navBarExAddViewAtEnd(id, remoteViews);
++    }
++
++    public void navBarExAddViewBefore(String targetId, String id, RemoteViews remoteViews) {
++        if (mNavigationBarView == null) return;
++        mNavigationBarView.navBarExAddViewBefore(targetId, id, remoteViews);
++    }
++
++    public void navBarExAddViewAfter(String targetId, String id, RemoteViews remoteViews) {
++        if (mNavigationBarView == null) return;
++        mNavigationBarView.navBarExAddViewAfter(targetId, id, remoteViews);
++    }
++
++    public void navBarExRemoveView(String id) {
++        if (mNavigationBarView == null) return;
++        mNavigationBarView.navBarExRemoveView(id);
++    }
++
++    public void navBarExReplaceView(String id, RemoteViews remoteViews) {
++        if (mNavigationBarView == null) return;
++        mNavigationBarView.navBarExReplaceView(id, remoteViews);
++    }
++
+     /**
+      * Ensures that the group children are cancelled immediately when the group summary is cancelled
+      * instead of waiting for the notification manager to send all cancels. Otherwise this could
+diff --git a/services/java/com/android/server/NavBarExService.java b/services/java/com/android/server/NavBarExService.java
+new file mode 100644
+index 0000000..d1fe16f
+--- /dev/null
++++ b/services/java/com/android/server/NavBarExService.java
+@@ -0,0 +1,247 @@
++package com.android.server;
++
++import android.content.Context;
++import android.os.INavBarExService;
++import android.os.INavBarExServiceUI;
++import android.os.RemoteException;
++import android.util.Log;
++import android.widget.RemoteViews;
++
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.Map;
++import java.util.Objects;
++import java.util.UUID;
++
++public class NavBarExService extends INavBarExService.Stub
++{
++	// the copy of android.util.Pair but "second" field made non final (to make it easier to replace elements. See "replace" method)
++	static class Pair<F, S>
++	{
++		public final F first;
++		public S second;
++
++		public Pair(F first, S second)
++		{
++			this.first = first;
++			this.second = second;
++		}
++
++		public boolean equals(Object o)
++		{
++			if (!(o instanceof Pair))
++			{
++				return false;
++			}
++			else
++			{
++				Pair p = (Pair) o;
++				return libcore.util.Objects.equal(p.first, this.first) && libcore.util.Objects.equal(p.second, this.second);
++			}
++		}
++
++		public int hashCode()
++		{
++			return (this.first == null ? 0 : this.first.hashCode()) ^ (this.second == null ? 0 : this.second.hashCode());
++		}
++	}
++
++	/**
++	 * The list sorted by priority parameter in descendant order. Very inefficient implementation
++	 *
++	 * @param <T>
++	 */
++	private static class PriorityList<T>
++	{
++		private final Map<String /*UUID*/, Pair<Integer /* priority */, T>> idsMap = new HashMap<>();
++		private final ArrayList<Pair<Integer /* priority */, T>> list = new ArrayList<>();
++
++		/**
++		 * Adds element into the list according to its priority. In case if there is another element in the list with the same priority
++		 * new element will be inserted after it.
++		 *
++		 * @param t
++		 * @param priority
++		 * @return the position of insertion
++		 */
++		public int add(int priority, String id, T t)
++		{
++			if (list.isEmpty())
++			{
++				Pair<Integer, T> newPair = new Pair<>(priority, t);
++				list.add(newPair);
++				idsMap.put(id, newPair);
++				return 0;
++			}
++
++			// list is not empty. insert at some position
++			int index = 0;
++			for (Pair<Integer, T> pair : list)
++			{
++				if (pair.first < priority)
++				{
++					Pair<Integer, T> newPair = new Pair<>(priority, t);
++					list.add(index, newPair);
++					idsMap.put(id, newPair);
++					return index;
++				}
++				index++;
++			}
++
++			// new element has lowest priority. Insert it at the end.
++			Pair<Integer, T> newPair = new Pair<>(priority, t);
++			list.add(index, newPair);
++			idsMap.put(id, newPair);
++			return index;
++		}
++
++		/**
++		 * @param id
++		 * @return true when deleted.
++		 */
++		public boolean removeById(String id)
++		{
++			Pair<Integer, T> pair = idsMap.get(id);
++			if (pair == null) return false;
++
++			idsMap.remove(id);
++			list.remove(pair);
++
++			return true;
++		}
++
++		public boolean replace(String id, T t)
++		{
++			Pair<Integer, T> pair = idsMap.get(id);
++			if (pair == null) return false;
++			pair.second = t;
++			return true;
++		}
++
++		/**
++		 * @return a list of sorted by priority elements
++		 */
++		public Iterable<Pair<String /* id */, T>> getList()
++		{
++			ArrayList<Pair<String /* id */, T>> ret = new ArrayList<>(list.size());
++			for (Pair<Integer /* priority */, T> pair : list)
++			{
++				String id = mapGetKeyByValue(idsMap, pair);
++				ret.add(new Pair<>(id, pair.second));
++			}
++			return ret;
++		}
++
++		/**
++		 * @param position
++		 * @return Element and its ID at position.
++		 */
++		public Pair<String /* id */, T> getAt(int position)
++		{
++			if ((position < 0) || (position > list.size())) return null;
++
++			Pair<Integer /* priority */, T> pair = list.get(position);
++			String id = mapGetKeyByValue(idsMap, pair);
++			return new Pair<>(id, pair.second);
++		}
++
++		public boolean idExist(String id)
++		{
++			return idsMap.containsKey(id);
++		}
++
++		public int size()
++		{
++			return list.size();
++		}
++
++		private static <T, E> T mapGetKeyByValue(Map<T, E> map, E value)
++		{
++			for (Map.Entry<T, E> entry : map.entrySet())
++			{
++				if (Objects.equals(value, entry.getValue()))
++				{
++					return entry.getKey();
++				}
++			}
++			return null;
++		}
++	}
++
++	private static final String TAG = NavBarExService.class.getSimpleName();
++
++	private final PriorityList<RemoteViews> remoteViewsList = new PriorityList<>();
++
++
++	private volatile INavBarExServiceUI ui;
++
++	public NavBarExService(Context context)
++	{
++		super();
++		Log.i(TAG, "NavBarExService()");
++	}
++
++	@Override
++	public void setUI(INavBarExServiceUI ui)
++	{
++		Log.d(TAG, "setUI");
++		this.ui = ui;
++		if (ui != null)
++		{
++			try
++			{
++				for (Pair<String /*UUID*/, RemoteViews> entry : remoteViewsList.getList())
++				{
++					ui.navBarExAddViewAtEnd(entry.first, entry.second);
++				}
++			}
++			catch (Exception e)
++			{
++				Log.e(TAG, "Failed to configure UI", e);
++			}
++		}
++	}
++
++	@Override
++	public String addView(int priority, RemoteViews remoteViews) throws RemoteException
++	{
++		String id = UUID.randomUUID().toString();
++		int pos = remoteViewsList.add(priority, id, remoteViews);
++		if (ui != null)
++		{
++			if (pos == 0)
++				ui.navBarExAddViewAtStart(id, remoteViews);
++			else if (pos == remoteViewsList.size() - 1)
++				ui.navBarExAddViewAtEnd(id, remoteViews);
++			else
++			{
++				// find previous element ID
++				Pair<String /* id */, RemoteViews> prevElPair = remoteViewsList.getAt(pos - 1);
++				ui.navBarExAddViewAfter(prevElPair.first, id, remoteViews);
++			}
++		}
++		return id;
++	}
++
++	@Override
++	public boolean removeView(String id) throws RemoteException
++	{
++		boolean ret = remoteViewsList.removeById(id);
++		if (ret && (ui != null)) ui.navBarExRemoveView(id);
++		return ret;
++	}
++
++	@Override
++	public boolean replaceView(String id, RemoteViews remoteViews) throws RemoteException
++	{
++		boolean ret = remoteViewsList.replace(id, remoteViews);
++		if (ret && (ui != null)) ui.navBarExReplaceView(id, remoteViews);
++		return ret;
++	}
++
++	@Override
++	public boolean viewExist(String id) throws RemoteException
++	{
++		return remoteViewsList.idExist(id);
++	}
++}
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 7ebdd31..06431e4 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -1167,6 +1167,15 @@ public final class SystemServer {
+             mSystemServiceManager.startService(LauncherAppsService.class);
+         }
+ 
++        try {
++            traceBeginAndSlog("StartNavBarExService");
++            ServiceManager.addService(Context.NAVBAREX_SERVICE, new NavBarExService(context));
++            Slog.i(TAG, "NavBarExService Started");
++        } catch (Throwable e) {
++            reportWtf("Failure starting NavBarExService Service", e);
++        }
++        Trace.traceEnd(Trace.TRACE_TAG_SYSTEM_SERVER);
++
+         if (!disableNonCoreServices && !disableMediaProjection) {
+             mSystemServiceManager.startService(MediaProjectionManagerService.class);
+         }
+-- 
+2.7.4
+
